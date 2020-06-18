@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-
 # ghpr
 # Copyright (C) 2018-2020 Salvo "LtWorf" Tomaselli
 #
@@ -68,7 +67,7 @@ def get_repo() -> RepoInfo:
     organization, reponame = repourl.split('/')
     if reponame.endswith('.git'):
         reponame = reponame[:-4]
-    return RepoInfo(ghurl, organization, reponame)
+    return RepoInfo('api.' + ghurl, organization, reponame)
 
 
 def get_token() -> str:
@@ -96,16 +95,13 @@ def make_pr(pr: PullRequest) -> PullRequestDescription:
     repo = get_repo()
     token = get_token()
 
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-
-    url = f'https://{repo.github_url}/api/v3/repos/{repo.organization}/{repo.repo_name}/pulls?access_token={token}'
+    url = f'https://{repo.github_url}/repos/{repo.organization}/{repo.repo_name}/pulls'
     req = urllib.request.Request(url)
-    req.data = json.dumps(typedload.dump(pr)).encode('utf8')
-    req.headers['Authorization'] = f'{token} OAUTH-TOKEN'
+    req.data = json.dumps(typedload.dump(pr)).encode('ascii')
+    req.headers['Authorization'] = f'token {token}'
+    req.headers['Accept'] = 'application/vnd.github.v3+json'
 
-    with urllib.request.urlopen(req, context=context) as f:
+    with urllib.request.urlopen(req) as f:
         return typedload.load(json.load(f), PullRequestDescription)
 
 
