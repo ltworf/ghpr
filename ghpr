@@ -1,0 +1,172 @@
+#!/usr/bin/python3
+
+# ghpr
+# Copyright (C) 2018-2020 Salvo "LtWorf" Tomaselli
+#
+# ghpr is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# author Salvo "LtWorf" Tomaselli <tiposchi@tiscali.it>
+
+import json
+import os
+import ssl
+import subprocess
+import sys
+from typing import *
+import urllib.request
+
+import typedload
+
+class RepoInfo(NamedTuple):
+    github_url: str
+    organization: str
+    repo_name: str
+
+
+class PullRequest(NamedTuple):
+    title: str
+    body: str
+    head: str
+    base: str
+
+
+class PullRequestDescription(NamedTuple):
+    html_url: str
+    id: int
+
+
+def get_repo() -> RepoInfo:
+    """
+    Returns information on the current github repo, which will be
+    used to open a PR on it
+    """
+    try:
+        out = subprocess.check_output(['git', 'remote', 'show', '-n', 'origin'], env={}).decode()
+    except:
+        sys.exit('git failed')
+
+    for line in out.split('\n'):
+        if 'Push  URL: ' not in line:
+            continue
+        url = line.split(': ')[1]
+        break
+
+    _, domain = url.split('@')
+
+    ghurl, repourl = domain.split(':')
+    organization, reponame = repourl.split('/')
+    if reponame.endswith('.git'):
+        reponame = reponame[:-4]
+    return RepoInfo(ghurl, organization, reponame)
+
+
+def get_token() -> str:
+    """
+    Returns the gh token or errors out printing instructions.
+    """
+    try:
+        with open(os.environ['HOME'] + '/.ghpr_token', 'rt') as f:
+            return f.read().strip()
+    except:
+        sys.exit('Place your token in ~/.ghpr_token')
+
+
+def get_current_branch() -> str:
+    """
+    Returns the name of the current branch.
+    """
+    try:
+        return subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], env={}).decode().strip()
+    except:
+        sys.exit('git failed')
+
+
+def make_pr(pr: PullRequest) -> PullRequestDescription:
+    repo = get_repo()
+    token = get_token()
+
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+
+    url = f'https://{repo.github_url}/api/v3/repos/{repo.organization}/{repo.repo_name}/pulls?access_token={token}'
+    req = urllib.request.Request(url)
+    req.data = json.dumps(typedload.dump(pr)).encode('utf8')
+    req.headers['Authorization'] = f'{token} OAUTH-TOKEN'
+
+    with urllib.request.urlopen(req, context=context) as f:
+        return typedload.load(json.load(f), PullRequestDescription)
+
+
+def read_description() -> Tuple[str, str]:
+    """
+    Reads from the user the title and description
+    to use for the PR
+    """
+    print(' ' * 69 + '|', end='\r')
+    print('Enter PR description')
+    print(' ' * 69 + '|', end='\r')
+    title = input()
+    body = ''
+    while True:
+        try:
+            print(' ' * 69 + '|', end='\r')
+            body += input() + '\n'
+        except EOFError:
+            break
+    return title, body.strip()
+
+
+def is_tracked(branch: str) -> bool:
+    try:
+        out = subprocess.check_output(['git', 'branch', '-vv'], env={}).decode()
+    except:
+        sys.exit('git failed')
+    for i in out.strip().split('\n'):
+        branch_name, info = i[2:].split(' ', 1)
+        if branch_name != branch:
+            continue
+        return '[origin/' in info
+    raise KeyError(f'Branch {branch} not found')
+
+
+def main():
+    current_branch = get_current_branch()
+
+    if len(sys.argv) == 2:
+        base = sys.argv[1]
+    else:
+        base = 'master'
+
+    title, body = read_description()
+    pr = PullRequest(
+        title=title,
+        body=body,
+        head=current_branch,
+        base=base,
+    )
+
+    if not is_tracked(current_branch):
+        print('The branch is not tracked remotely. Pushing it…')
+        subprocess.check_call(['git', 'push', '--set-upstream', 'origin', current_branch])
+
+    print('Creating pull request...')
+    print(make_pr(pr).html_url)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
